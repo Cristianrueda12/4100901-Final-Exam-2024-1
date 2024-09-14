@@ -1,3 +1,9 @@
+/*
+ * keypad.c
+ *
+ *  Created on: Sep 9, 2024
+ *      Author: Cristian
+ */
 
 
 #include "keypad.h"
@@ -21,26 +27,26 @@ static uint8_t keypad_debounce(uint16_t GPIO_Pin)
 	return 1;
 }
 
-uint8_t keypad_scan_row(GPIO_TypeDef *COLx_GPIO_Port, uint16_t COLx_Pin)
+uint8_t keypad_scan_row(GPIO_TypeDef *COLUMNx_GPIO_Port, uint16_t COLUMNx_Pin)
 {
 	uint8_t row_pressed = 0xFF;
 	HAL_GPIO_WritePin(ROW_1_GPIO_Port, ROW_1_Pin, GPIO_PIN_RESET);
-	if (HAL_GPIO_ReadPin(COLx_GPIO_Port, COLx_Pin) == 0) {
+	if (HAL_GPIO_ReadPin(COLUMNx_GPIO_Port, COLUMNx_Pin) == 0) {
 		row_pressed =  1;
 		goto row_scan_end;
 	}
 	HAL_GPIO_WritePin(ROW_2_GPIO_Port, ROW_2_Pin, GPIO_PIN_RESET);
-	if (HAL_GPIO_ReadPin(COLx_GPIO_Port, COLx_Pin) == 0) {
+	if (HAL_GPIO_ReadPin(COLUMNx_GPIO_Port, COLUMNx_Pin) == 0) {
 		row_pressed =  2;
 		goto row_scan_end;
 	}
 	HAL_GPIO_WritePin(ROW_3_GPIO_Port, ROW_3_Pin, GPIO_PIN_RESET);
-	if (HAL_GPIO_ReadPin(COLx_GPIO_Port, COLx_Pin) == 0) {
+	if (HAL_GPIO_ReadPin(COLUMNx_GPIO_Port, COLUMNx_Pin) == 0) {
 		row_pressed =  3;
 		goto row_scan_end;
 	}
 	HAL_GPIO_WritePin(ROW_4_GPIO_Port, ROW_4_Pin, GPIO_PIN_RESET);
-	if (HAL_GPIO_ReadPin(COLx_GPIO_Port, COLx_Pin) == 0) {
+	if (HAL_GPIO_ReadPin(COLUMNx_GPIO_Port, COLUMNx_Pin) == 0) {
 		row_pressed =  4;
 		goto row_scan_end;
 	}
@@ -68,23 +74,23 @@ uint8_t keypad_scan(uint16_t GPIO_Pin)
 	}
 	uint8_t row = 0xFF;
 	switch (GPIO_Pin) {
-	case COL_1_Pin:
-		row = keypad_scan_row(COL_1_GPIO_Port, COL_1_Pin);
+	case COLUMN_1_Pin:
+		row = keypad_scan_row(COLUMN_1_GPIO_Port, COLUMN_1_Pin);
 		key_pressed = keypad_chars[row - 1][1 - 1];
 		break;
 
-	case COL_2_Pin:
-		row = keypad_scan_row(COL_2_GPIO_Port, COL_2_Pin);
+	case COLUMN_2_Pin:
+		row = keypad_scan_row(COLUMN_2_GPIO_Port, COLUMN_2_Pin);
 		key_pressed = keypad_chars[row - 1][2 - 1];
 		break;
 
-	case COL_3_Pin:
-			row = keypad_scan_row(COL_3_GPIO_Port, COL_3_Pin);
+	case COLUMN_3_Pin:
+			row = keypad_scan_row(COLUMN_3_GPIO_Port, COLUMN_3_Pin);
 			key_pressed = keypad_chars[row - 1][3 - 1];
 			break;
 
-	case COL_4_Pin:
-			row = keypad_scan_row(COL_4_GPIO_Port, COL_4_Pin);
+	case COLUMN_4_Pin:
+			row = keypad_scan_row(COLUMN_4_GPIO_Port, COLUMN_4_Pin);
 			key_pressed = keypad_chars[row - 1][4 - 1];
 			break;
 	default:

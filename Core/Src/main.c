@@ -51,15 +51,41 @@ I2C_HandleTypeDef hi2c1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-#define KEYPAD_RB_LEN 4
-uint8_t keypad_data = 0xFF;
-uint8_t keypad_buffer[KEYPAD_RB_LEN];
-ring_buffer_t keypad_rb;
+uint8_t data_usart2;
+uint8_t newline[] = "\r\n";
 
-#define USART2_RB_LEN 4
-uint8_t usart2_data = 0xFF;
-uint8_t usart2_buffer[USART2_RB_LEN];
-ring_buffer_t usart2_rb;
+#define BUFFER_CAPACITY 10
+uint8_t keyboard_buffer_memory[BUFFER_CAPACITY];
+ring_buffer_t keyboard_ring_buffer;
+uint8_t first_key_pressed = 0;
+uint8_t cursor_x_position = 10;  // Control de la posición del cursor horizontal
+uint8_t cursor_y_position = 30;  // Línea en la que aparecerán las teclas
+uint8_t max_cursor_x_position = 80;
+
+#define MAX_DISPLAY_CHARS 20 // Ajusta este valor según el tamaño de la pantalla y el tamaño del texto
+
+// Buffer para almacenar la secuencia de teclas
+static char display_buffer[MAX_DISPLAY_CHARS + 1]; // +1 para el terminador nulo
+static uint8_t buffer_index = 0; // Asegúrate de que esta definición sea única
+
+// Variables para la posición actual del cursor en la pantalla
+static uint8_t cursor_x = 10;
+static uint8_t cursor_y = 30;
+uint16_t left_toggles=0;
+uint8_t incorrect_password_toggles = 6;  // Parpadeos para contraseña incorrecta
+uint32_t incorrect_password_interval = 125;  // 125 ms entre parpadeos
+uint16_t left_toggles2=0;
+uint8_t warning_toggles = 10;  // Parpadeos para otro caso
+uint32_t warning_interval = 500;  // 500 ms entre parpadeos
+uint8_t flashing_active = 0;  // Bandera para activar o desactivar el parpadeo
+uint8_t flashing_active2=0;
+uint8_t flashing_frequency=0;
+uint8_t flashing_frequency2=0;
+
+uint8_t flag_B1=0;
+
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,38 +101,104 @@ static void MX_I2C1_Init(void);
 /* USER CODE BEGIN 0 */
 int _write(int file, char *ptr, int len)
 {
+  // to using printf
   HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 10);
   return len;
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-	/* Data received in USART2 */
-	if (huart->Instance == USART2) {
-		if (usart2_data >= '0' && usart2_data <= '9') {
-			ring_buffer_write(&usart2_rb, usart2_data);
-			if (ring_buffer_is_full(&keypad_rb) != 0) {
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    // Detectar si la interrupción es causada por el botón en PC13
+    if (GPIO_Pin == B1_Pin) {
+        // Botón en PC13 presionado, realizar la suma de los dígitos ingresados
+        int sum = 0;
+        for (uint8_t i = 0; i < buffer_index; i++) {
+            if (display_buffer[i] >= '0' && display_buffer[i] <= '9') {
+                sum += display_buffer[i] - '0'; // Convertir char a int y sumar
+            }
+        }
 
-			}
-		}
-		HAL_UART_Receive_IT(&huart2, &usart2_data, 1);
-	}
+        // Mostrar la suma en la pantalla
+        char sum_str[20];
+        snprintf(sum_str, sizeof(sum_str), "Suma: %d", sum);
+
+        ssd1306_Fill(Black);
+        ssd1306_SetCursor(10, 20);
+        ssd1306_WriteString(sum_str, Font_6x8, White);
+        ssd1306_UpdateScreen();
+        HAL_UART_Transmit(&huart2, (uint8_t*)sum_str, strlen(sum_str), 10);
+
+        // Reiniciar el buffer después de mostrar la suma
+        ring_buffer_reset(&keyboard_ring_buffer);
+        memset(display_buffer, 0, sizeof(display_buffer)); // Limpiar el buffer de pantalla
+        buffer_index = 0; // Reiniciar el índice del buffer
+        cursor_x = 10;  // Reinicia la posición horizontal del cursor
+        cursor_y = 30;  // Reinicia la posición vertical del cursor
+        return;
+    }
+
+    // Código existente para el teclado matricial
+    uint8_t key_pressed = keypad_scan(GPIO_Pin);
+    if (key_pressed != 0xFF) {
+        // Si se presiona '*', reinicia la secuencia
+        if (key_pressed == '*') {
+            ring_buffer_reset(&keyboard_ring_buffer);
+            memset(display_buffer, 0, sizeof(display_buffer)); // Limpiar el buffer de pantalla
+            buffer_index = 0; // Reiniciar el índice del buffer
+
+            ssd1306_Fill(Black);
+            ssd1306_SetCursor(10, 20);
+            ssd1306_WriteString("Secuencia reiniciada", Font_6x8, White);
+            ssd1306_UpdateScreen();
+            HAL_UART_Transmit(&huart2, (uint8_t*)"Secuencia reiniciada\n\r", 22, 10);
+            return;
+        }
+
+        // Contar la cantidad de dígitos en el buffer
+        uint8_t digit_count = 0;
+        for (uint8_t i = 0; i < buffer_index; i++) {
+            if (display_buffer[i] >= '0' && display_buffer[i] <= '9') {
+                digit_count++;
+            }
+        }
+
+        // Verificar si ya se ingresaron 4 dígitos
+        if (digit_count >= 4) {
+            // Mostrar mensaje "Espacio lleno" y reiniciar la secuencia
+            ssd1306_Fill(Black);
+            ssd1306_SetCursor(10, 20);
+            ssd1306_WriteString("Espacio lleno", Font_6x8, White);
+            ssd1306_UpdateScreen();
+            HAL_UART_Transmit(&huart2, (uint8_t*)"Espacio lleno\n\r", 15, 10);
+
+            // Reiniciar el buffer
+            ring_buffer_reset(&keyboard_ring_buffer);
+            memset(display_buffer, 0, sizeof(display_buffer)); // Limpiar el buffer de pantalla
+            buffer_index = 0; // Reiniciar el índice del buffer
+            return;
+        }
+
+        // Escribir la tecla en el ring buffer
+        if (key_pressed != '#') { // Ya no se usará '#' para sumar
+            ring_buffer_write(&keyboard_ring_buffer, key_pressed);
+
+            // Agregar el carácter al buffer de pantalla
+            if (buffer_index < MAX_DISPLAY_CHARS) {
+                display_buffer[buffer_index++] = key_pressed;
+                display_buffer[buffer_index] = '\0'; // Null-terminar el buffer
+
+                // Limpiar la pantalla y mostrar el contenido del buffer
+                ssd1306_Fill(Black);
+                ssd1306_SetCursor(10, 30);
+                ssd1306_WriteString(display_buffer, Font_6x8, White);
+                ssd1306_UpdateScreen();
+
+                // Transmitir el carácter a través de UART en tiempo real
+                HAL_UART_Transmit(&huart2, &key_pressed, 1, 10);
+            }
+        }
+    }
 }
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	if (GPIO_Pin == B1_Pin) {
-
-		return;
-	}
-	uint8_t key_pressed = keypad_scan(GPIO_Pin);
-	if (key_pressed != 0xFF) {
-		ring_buffer_write(&keypad_rb, keypad_data);
-		if (ring_buffer_is_full(&keypad_rb) != 0) {
-
-		}
-	}
-}
 /* USER CODE END 0 */
 
 /**
@@ -141,20 +233,24 @@ int main(void)
   MX_USART2_UART_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+  ring_buffer_init(&keyboard_ring_buffer, keyboard_buffer_memory, BUFFER_CAPACITY);
   ssd1306_Init();
   ssd1306_Fill(Black);
-  ssd1306_SetCursor(20, 20);
-  ssd1306_WriteString("Welcome!", Font_7x10, White);
+  ssd1306_SetCursor(10,20);
+  ssd1306_WriteString("iniciando",Font_6x8,White);
   ssd1306_UpdateScreen();
 
-  HAL_UART_Receive_IT(&huart2, &usart2_data, 1);
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("Starting\r\n");
+  printf("Starting...\r\n");
   while (1)
   {
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -275,7 +371,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 256000;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
@@ -312,16 +408,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|ROW_1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ROW_4_GPIO_Port, ROW_4_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ROW_1_GPIO_Port, ROW_1_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, ROW_3_Pin|ROW_2_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, ROW_2_Pin|ROW_4_Pin|ROW_3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -329,56 +419,39 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin ROW_1_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|ROW_1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ROW_4_Pin */
-  GPIO_InitStruct.Pin = ROW_4_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  HAL_GPIO_Init(ROW_4_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ROW_1_Pin */
-  GPIO_InitStruct.Pin = ROW_1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  HAL_GPIO_Init(ROW_1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : ROW_3_Pin ROW_2_Pin */
-  GPIO_InitStruct.Pin = ROW_3_Pin|ROW_2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : COL_4_Pin */
-  GPIO_InitStruct.Pin = COL_4_Pin;
+  /*Configure GPIO pin : COLUMN_1_Pin */
+  GPIO_InitStruct.Pin = COLUMN_1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(COL_4_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(COLUMN_1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : COL_3_Pin COL_1_Pin COL_2_Pin */
-  GPIO_InitStruct.Pin = COL_3_Pin|COL_1_Pin|COL_2_Pin;
+  /*Configure GPIO pin : COLUMN_4_Pin */
+  GPIO_InitStruct.Pin = COLUMN_4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(COLUMN_4_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : COLUMN_2_Pin COLUMN_3_Pin */
+  GPIO_InitStruct.Pin = COLUMN_2_Pin|COLUMN_3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : ROW_2_Pin ROW_4_Pin ROW_3_Pin */
+  GPIO_InitStruct.Pin = ROW_2_Pin|ROW_4_Pin|ROW_3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
-
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
